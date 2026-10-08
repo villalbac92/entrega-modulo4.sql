@@ -1,0 +1,115 @@
+-- pre-entrega-modulo4.sql
+-- Módulo 4 - Inteligencia de negocio con JOIN, GROUP BY y HAVING
+--
+-- Supuesto de esquema:
+-- categorias(id_categoria, nombre)
+-- productos(id_producto, id_categoria, nombre, precio, ...)
+-- clientes(id_cliente, nombre, ...)
+-- ventas(id_venta, id_cliente, id_producto, cantidad, fecha_venta, precio_unitario, ...)
+-- PostgreSQL
+
+-- ============================================================
+-- 1. RENTABILIDAD / RENDIMIENTO POR CATEGORÍA
+-- ============================================================
+-- Problema de negocio:
+-- Identifica categorías con volumen comercial relevante para priorizar
+-- inventario, promociones y decisiones comerciales.
+--
+-- Umbral definido en MÁS DE 10 UNIDADES vendidas porque permite
+-- concentrarse en categorías con movimiento significativo.
+-- El filtro de SUM va en HAVING porque es un resultado agregado.
+
+SELECT
+    ca.nombre AS categoria,
+    SUM(v.cantidad) AS unidades_vendidas,
+    SUM(v.cantidad * v.precio_unitario) AS ingreso_total
+FROM ventas AS v
+INNER JOIN productos AS p
+    ON p.id_producto = v.id_producto
+INNER JOIN categorias AS ca
+    ON ca.id_categoria = p.id_categoria
+GROUP BY
+    ca.id_categoria,
+    ca.nombre
+HAVING SUM(v.cantidad) > 10
+ORDER BY ingreso_total DESC;
+
+
+-- ============================================================
+-- 2. CLIENTES SIN COMPRAS
+-- ============================================================
+-- Problema de negocio:
+-- Detecta clientes registrados que todavía no compraron para poder
+-- crear campañas de activación, descuentos de primera compra o acciones
+-- de conversión.
+--
+-- LEFT JOIN conserva los clientes aunque no tengan ventas.
+-- COALESCE muestra 0 en lugar de NULL. La condición sobre COUNT
+-- se coloca en HAVING por tratarse de un resultado agregado.
+
+SELECT
+    c.id_cliente,
+    c.nombre AS cliente,
+    COALESCE(COUNT(v.id_venta), 0) AS cantidad_compras
+FROM clientes AS c
+LEFT JOIN ventas AS v
+    ON v.id_cliente = c.id_cliente
+GROUP BY
+    c.id_cliente,
+    c.nombre
+HAVING COUNT(v.id_venta) = 0
+ORDER BY c.nombre;
+
+
+-- ============================================================
+-- 3. TOP DE COMPRAS POR CLIENTE
+-- ============================================================
+-- Problema de negocio:
+-- Determina cuál es el producto que cada cliente compró más veces y
+-- cuándo realizó su última transacción. Sirve para personalizar
+-- recomendaciones, promociones y estrategias de fidelización.
+--
+-- Primero se agrupan las compras por cliente y producto. Después,
+-- ROW_NUMBER selecciona el producto con mayor frecuencia para cada
+-- cliente. En caso de empate, el nombre del producto define el desempate.
+
+WITH compras_por_producto AS (
+    SELECT
+        c.id_cliente,
+        c.nombre AS cliente,
+        p.id_producto,
+        p.nombre AS producto,
+        COUNT(v.id_venta) AS veces_comprado,
+        MAX(v.fecha_venta) AS ultima_transaccion
+    FROM clientes AS c
+    INNER JOIN ventas AS v
+        ON v.id_cliente = c.id_cliente
+    INNER JOIN productos AS p
+        ON p.id_producto = v.id_producto
+    GROUP BY
+        c.id_cliente,
+        c.nombre,
+        p.id_producto,
+        p.nombre
+),
+ranking_clientes AS (
+    SELECT
+        cpp.id_cliente,
+        cpp.cliente,
+        cpp.producto,
+        cpp.veces_comprado,
+        cpp.ultima_transaccion,
+        ROW_NUMBER() OVER (
+            PARTITION BY cpp.id_cliente
+            ORDER BY cpp.veces_comprado DESC, cpp.producto ASC
+        ) AS posicion
+    FROM compras_por_producto AS cpp
+)
+SELECT
+    rc.cliente,
+    rc.producto AS producto_mas_comprado,
+    rc.veces_comprado,
+    rc.ultima_transaccion
+FROM ranking_clientes AS rc
+WHERE rc.posicion = 1
+ORDER BY rc.cliente;
